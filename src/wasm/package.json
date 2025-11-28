@@ -1,0 +1,15 @@
+{
+  "name": "elixir",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "elixir_bg.wasm",
+    "elixir.js",
+    "elixir.d.ts"
+  ],
+  "main": "elixir.js",
+  "types": "elixir.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
