@@ -1,19 +1,13 @@
-// Cordova应用入口文件
-// 立即执行的TypeScript代码
-import { compute_md5, initSync } from './wasm/elixir';
-import elixirInit from './wasm/elixir';
-// 导入文件操作模块
-import * as fileModule from './file';
-import { openFileUrl, readFile, openChildrenFile, newFile, writeFile } from './file/fileOperations';
-import { downloadResourceToDirectory } from './file/download';
-// 导入日志模块
-import { log, error, info, warn, debug, getLogs, getLatestLogs, getLogsByTimeRange, clearLogs, setMaxLogs, exportLogsAsJSON, searchLogs, LogLevel } from './logger/consoleLogger';
-// 导入网络模块
-import * as networkModule from './network';
-import { checkNetworkConnection } from './network';
-
-// 导入更新模块
-import updateModule from './update';
+// 更新管理器 - 处理应用更新和资源下载
+import { compute_md5, initSync } from '../wasm/elixir';
+import elixirInit from '../wasm/elixir';
+import { openFileUrl, readFile, openChildrenFile, newFile, writeFile } from '../file/fileOperations';
+import { downloadResourceToDirectory } from '../file/download';
+import { log, error, info, warn, debug } from '../logger/consoleLogger';
+import { checkNetworkConnection } from '../network';
+import * as fileModule from '../file';
+import * as networkModule from '../network';
+import * as types from './types';
 
 // 定义常量
 //@ts-ignore
@@ -36,14 +30,300 @@ const RESOURCE_DIRS = {
 // 资源URL匹配正则表达式
 const RESOURCE_URL_REGEX = /https:\/\/(?:[a-zA-Z0-9\-_]+\.)*codemao\.cn\/[a-zA-Z0-9\-_\.\/]+(?:\.jsx?|\.css|\.png|\.jpg)(?:\?[a-zA-Z0-9\-_=&]*)?/g;
 
-// 更新逻辑已移至update模块
+// WASM初始化状态
+let wasmInitialized = false;
 
-// getRemoteVersionInfo函数已移至update模块
+/**
+ * 检查WASM模块是否初始化
+ */
+export const checkWasm = async (): Promise<boolean> => {
+  if(wasmInitialized) {
+    return true;
+  }
 
-// updateAndExecuteLatestJs函数已移至update模块
+  try {
+    log('WASM模块未初始化，正在初始化...');
+    await elixirInit();
+    wasmInitialized = true;
+    log('WASM模块初始化成功');
+    return true;
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    error('WASM模块初始化失败:', errorMessage);
+    return false;
+  }
+};
 
-// 优先执行处理过的JS文件，如果不存在则执行原始文件
-async function executeProcessedOrLatestJs(): Promise<{ success: boolean; result?: any; error?: string }> {
+/**
+ * 下载更新文件
+ */
+export async function downloadLatestJsUpdate(url: string): Promise<types.DownloadResult> {
+  return new Promise(async (resolve) => {
+    log(`开始下载更新文件: ${url}`);
+    
+    // 使用downloadResourceToDirectory函数下载文件到指定目录
+    downloadResourceToDirectory(url, ANDROID_FILE_PATH, async (result) => {
+      if (!result.s) {
+        error(`下载更新文件失败: ${JSON.stringify(result.err)}`);
+        resolve({ success: false, error: `下载失败: ${JSON.stringify(result.err)}` });
+        return;
+      }
+      
+      log('更新文件下载成功');
+      
+      // 尝试删除旧的处理文件和锁文件
+      try {
+        await deleteFileIfExists(LATEST_PROCESSED_FILE);
+        await deleteFileIfExists(LOCK_FILE);
+        log('已清理旧的处理文件和锁文件');
+      } catch (err) {
+        log(`清理旧处理文件时出错: ${err}`);
+      }
+      
+      // 下载成功后，重新读取文件内容
+      openFileUrl(ANDROID_FILE_PATH, (dirResult) => {
+        if (!dirResult.s) {
+          resolve({ success: false, error: `无法打开目录: ${JSON.stringify(dirResult.err)}` });
+          return;
+        }
+        
+        const dirFid = dirResult.fid;
+        if (!dirFid) {
+          resolve({ success: false, error: '获取目录ID失败' });
+          return;
+        }
+        
+        openChildrenFile(dirFid, LATEST_JS_FILE, (fileResult) => {
+          if (!fileResult.s) {
+            resolve({ success: false, error: `无法打开文件: ${JSON.stringify(fileResult.err)}` });
+            return;
+          }
+          
+          const fileFid = fileResult.fid;
+          if (!fileFid) {
+            resolve({ success: false, error: '获取文件ID失败' });
+            return;
+          }
+          
+          readFile(fileFid, 'Text', async (readResult) => {
+            if (!readResult.s) {
+              resolve({ success: false, error: `无法读取文件内容: ${JSON.stringify(readResult.err)}` });
+              return;
+            }
+            
+            const content = readResult.data as string;
+            
+            // 如果有内容，处理资源文件
+            if (content) {
+              log('开始处理资源文件');
+              const processResult = await processLatestJsWithResources(content);
+              if (processResult.success) {
+                log('资源文件处理成功');
+              } else {
+                log(`资源文件处理失败: ${processResult.error}`);
+                // 处理失败不影响更新，只是不会生成processed文件
+              }
+            }
+            
+            resolve({ success: true, content });
+          });
+        });
+      });
+    }, LATEST_JS_FILE);
+  });
+}
+
+/**
+ * 获取远程版本信息
+ */
+export async function getRemoteVersionInfo(): Promise<types.RemoteVersionInfo> {
+  return new Promise((resolve) => {
+    // 获取packageName
+    const packageName = (window as any).PKG;
+    const fullUrl = `${UPDATE_SERVER_URL}${encodeURIComponent(packageName)}`;
+    
+    log(`开始获取远程版本信息: ${fullUrl}`);
+    
+    // 创建XMLHttpRequest对象
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', fullUrl, true);
+    xhr.responseType = 'json';
+    
+    xhr.onload = function() {
+      if (xhr.status === 200) {
+        try {
+          const response = xhr.response;
+          if (response && response.status) {
+            log(`成功获取远程版本信息，MD5: ${response.data.md5}`);
+            resolve({ 
+              success: true, 
+              md5: response.data.md5, 
+              url: response.data.url 
+            });
+          } else {
+            error('远程版本信息格式不正确');
+            resolve({ success: false, error: '远程版本信息格式不正确' });
+          }
+        } catch (err) {
+          error(`解析远程版本信息失败: ${err}`);
+          resolve({ success: false, error: `解析远程版本信息失败: ${err}` });
+        }
+      } else {
+        error(`获取远程版本信息失败，状态码: ${xhr.status}`);
+        resolve({ success: false, error: `获取远程版本信息失败，状态码: ${xhr.status}` });
+      }
+    };
+    
+    xhr.onerror = function() {
+      error('获取远程版本信息网络错误');
+      resolve({ success: false, error: '网络连接错误' });
+    };
+    
+    xhr.timeout = 10000; // 10秒超时
+    xhr.ontimeout = function() {
+      error('获取远程版本信息超时');
+      resolve({ success: false, error: '请求超时' });
+    };
+    
+    xhr.send();
+  });
+}
+
+/**
+ * 主更新触发函数
+ */
+export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecuteResult> {
+  try {
+    log('====================================');
+    log('开始执行更新和代码加载流程');
+    
+    // 确保WASM模块已初始化（用于MD5计算）
+    const wasmReady = await checkWasm();
+    if (!wasmReady) {
+      log('WASM初始化失败，无法进行MD5计算');
+      // 即使WASM初始化失败，也尝试执行处理过的或最新的JS文件
+      const executeResult = await executeProcessedOrLatestJs();
+      if (executeResult.success) {
+        log('成功执行本地JS文件');
+        log('====================================');
+        return { 
+          success: true, 
+          updated: false, 
+          executed: true 
+        };
+      }
+      return { 
+        success: false, 
+        updated: false, 
+        executed: false, 
+        error: 'WASM模块初始化失败，无法进行MD5计算' 
+      };
+    }
+    
+    // 检查更新并下载
+    const updateResult = await checkAndDownloadUpdate();
+    log(`更新检查结果: 成功=${updateResult.success}, 需要更新=${updateResult.needUpdate}`);
+    if (!updateResult.success) {
+      log(`更新检查失败: ${updateResult.error}`);
+      // 失败时尝试执行处理过的或最新的JS文件
+      const executeResult = await executeProcessedOrLatestJs();
+      if (executeResult.success) {
+        log('成功执行本地JS文件');
+        log('====================================');
+        return { 
+          success: true, 
+          updated: updateResult.needUpdate || false, 
+          executed: true 
+        };
+      }
+      return { 
+        success: false, 
+        updated: updateResult.needUpdate || false, 
+        executed: false, 
+        error: updateResult.error 
+      };
+    }
+    
+    // 如果有代码内容或需要更新，处理资源并执行代码
+    if (updateResult.content || updateResult.needUpdate) {
+      // 先尝试执行处理过的文件
+      const executeResult = await executeProcessedOrLatestJs();
+      if (executeResult.success) {
+        log('成功执行处理过的JS文件');
+        log('====================================');
+        return { 
+          success: true, 
+          updated: updateResult.needUpdate, 
+          executed: true 
+        };
+      }
+      
+      // 如果处理过的文件执行失败，且有新内容，则直接执行新内容
+      if (updateResult.content) {
+        const directExecuteResult = executeJavaScriptCode(updateResult.content);
+        if (directExecuteResult.success) {
+          log('latest.js代码执行成功');
+          log('====================================');
+          return { 
+            success: true, 
+            updated: updateResult.needUpdate, 
+            executed: true 
+          };
+        } else {
+          log(`latest.js代码执行失败: ${directExecuteResult.error}`);
+          log('====================================');
+          return { 
+            success: false, 
+            updated: updateResult.needUpdate, 
+            executed: false, 
+            error: directExecuteResult.error 
+          };
+        }
+      }
+    }
+    
+    log('没有可执行的代码内容');
+    log('====================================');
+    return { 
+      success: false, 
+      updated: updateResult.needUpdate, 
+      executed: false, 
+      error: '没有可执行的代码内容' 
+    };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    error(`更新和执行流程发生错误: ${errorMessage}`);
+    
+    // 出现错误时，尝试执行处理过的或最新的JS文件
+    try {
+      const executeResult = await executeProcessedOrLatestJs();
+      if (executeResult.success) {
+        log('成功执行本地JS文件');
+        log('====================================');
+        return { 
+          success: true, 
+          updated: false, 
+          executed: true 
+        };
+      }
+    } catch (executeError) {
+      error('执行本地JS文件时也出错', executeError);
+    }
+    
+    log('====================================');
+    return { 
+      success: false, 
+      updated: false, 
+      executed: false, 
+      error: errorMessage 
+    };
+  }
+}
+
+/**
+ * 优先执行处理过的JS文件，如果不存在则执行原始文件
+ */
+export async function executeProcessedOrLatestJs(): Promise<types.JavaScriptExecutionResult> {
   try {
     log('尝试执行处理过的JS文件');
     
@@ -115,10 +395,10 @@ async function executeProcessedOrLatestJs(): Promise<{ success: boolean; result?
   }
 }
 
-
-
-// 处理资源文件，下载并转换URL
-async function processLatestJsWithResources(content: string): Promise<{ success: boolean; processedContent?: string; error?: string }> {
+/**
+ * 处理资源文件，下载并转换URL
+ */
+export async function processLatestJsWithResources(content: string): Promise<types.ResourceProcessResult> {
   return new Promise(async (resolve) => {
     try {
       log('开始处理latest.js中的资源文件');
@@ -202,8 +482,10 @@ async function processLatestJsWithResources(content: string): Promise<{ success:
   });
 }
 
-// 工具函数：创建资源目录
-async function createResourceDirectories(): Promise<void> {
+/**
+ * 工具函数：创建资源目录
+ */
+export async function createResourceDirectories(): Promise<void> {
   return new Promise((resolve) => {
     // 打开主目录
     openFileUrl(ANDROID_FILE_PATH, (dirResult) => {
@@ -244,8 +526,10 @@ fileModule.newDir(dirFid, false, RESOURCE_DIRS.JS, (result) => {
   });
 }
 
-// 工具函数：删除文件（如果存在）
-async function deleteFileIfExists(filename: string): Promise<void> {
+/**
+ * 工具函数：删除文件（如果存在）
+ */
+export async function deleteFileIfExists(filename: string): Promise<void> {
   return new Promise((resolve) => {
     openFileUrl(ANDROID_FILE_PATH, (dirResult: any) => {
       if (!dirResult.s) {
@@ -273,8 +557,10 @@ async function deleteFileIfExists(filename: string): Promise<void> {
   });
 }
 
-// 工具函数：下载资源到本地
-async function downloadResourceToLocal(resourceUrl: string): Promise<{ success: boolean; localPath?: string; error?: string }> {
+/**
+ * 工具函数：下载资源到本地
+ */
+export async function downloadResourceToLocal(resourceUrl: string): Promise<types.ResourceDownloadResult> {
   return new Promise((resolve) => {
     try {
       // 确定资源类型和存储路径
@@ -319,8 +605,10 @@ async function downloadResourceToLocal(resourceUrl: string): Promise<{ success: 
   });
 }
 
-// 工具函数：写入文件到指定路径
-async function writeFileToPath(filePath: string, content: string): Promise<{ success: boolean; error?: string }> {
+/**
+ * 工具函数：写入文件到指定路径
+ */
+export async function writeFileToPath(filePath: string, content: string): Promise<types.FileWriteResult> {
   return new Promise((resolve) => {
     try {
       // 解析路径，获取目录和文件名
@@ -380,13 +668,17 @@ async function writeFileToPath(filePath: string, content: string): Promise<{ suc
   });
 }
 
-// 工具函数：转义正则表达式特殊字符
-function escapeRegExp(string: string): string {
+/**
+ * 工具函数：转义正则表达式特殊字符
+ */
+export function escapeRegExp(string: string): string {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// 执行JavaScript代码
-function executeJavaScriptCode(code: string): { success: boolean; result?: any; error?: string } {
+/**
+ * 执行JavaScript代码
+ */
+export function executeJavaScriptCode(code: string): types.JavaScriptExecutionResult {
   if (!code || typeof code !== 'string') {
     return { success: false, error: '代码为空或不是字符串' };
   }
@@ -416,8 +708,10 @@ function executeJavaScriptCode(code: string): { success: boolean; result?: any; 
   }
 }
 
-// 比较MD5并下载更新
-async function checkAndDownloadUpdate(): Promise<{ success: boolean; needUpdate: boolean; content?: string; error?: string }> {
+/**
+ * 比较MD5并下载更新
+ */
+export async function checkAndDownloadUpdate(): Promise<types.CheckAndDownloadResult> {
   try {
     log('开始检查更新流程');
     // 检查网络连接
@@ -454,7 +748,7 @@ async function checkAndDownloadUpdate(): Promise<{ success: boolean; needUpdate:
     
     // 获取远程版本信息
     log('开始获取远程版本信息');
-    const remoteVersionResult = await updateModule.getRemoteVersionInfo();
+    const remoteVersionResult = await getRemoteVersionInfo();
     
     if (!remoteVersionResult.success) {
       log(`获取远程版本信息失败: ${remoteVersionResult.error}`);
@@ -485,7 +779,7 @@ async function checkAndDownloadUpdate(): Promise<{ success: boolean; needUpdate:
     }
     
     log('发现新版本，开始下载更新');
-    const downloadResult = await updateModule.downloadLatestJsUpdate(remoteVersionResult.url);
+    const downloadResult = await downloadLatestJsUpdate(remoteVersionResult.url);
     
     if (!downloadResult.success) {
       log(`下载更新失败: ${downloadResult.error}`);
@@ -510,8 +804,10 @@ async function checkAndDownloadUpdate(): Promise<{ success: boolean; needUpdate:
   }
 }
 
-// 检查文件是否存在
-async function checkFileExists(filename: string): Promise<boolean> {
+/**
+ * 检查文件是否存在
+ */
+export async function checkFileExists(filename: string): Promise<boolean> {
   return new Promise((resolve) => {
     openFileUrl(ANDROID_FILE_PATH, (dirResult: any) => {
       if (!dirResult.s) {
@@ -532,8 +828,10 @@ async function checkFileExists(filename: string): Promise<boolean> {
   });
 }
 
-// 读取本地文件并计算MD5
-async function readLocalFileAndComputeMD5(filename: string): Promise<{ success: boolean; md5?: string; content?: string; error?: string }> {
+/**
+ * 读取本地文件并计算MD5
+ */
+export async function readLocalFileAndComputeMD5(filename: string): Promise<types.LocalFileResult> {
   return new Promise((resolve) => {
     // 打开目录
     openFileUrl(ANDROID_FILE_PATH, (dirResult) => {
@@ -605,183 +903,9 @@ async function readLocalFileAndComputeMD5(filename: string): Promise<{ success: 
   });
 }
 
-// 读取本地latest.js文件并计算MD5
-async function readLocalLatestJsAndComputeMD5(): Promise<{ success: boolean; md5?: string; content?: string; error?: string }> {
+/**
+ * 读取本地latest.js文件并计算MD5
+ */
+export async function readLocalLatestJsAndComputeMD5(): Promise<types.LocalFileResult> {
   return readLocalFileAndComputeMD5(LATEST_JS_FILE);
-}
-
-let wasmInitialized = false;
-
-const checkWasm = async (): Promise<boolean> => {
-  if(wasmInitialized) {
-    return true;
-  }
-
-  try {
-    log('WASM模块未初始化，正在初始化...');
-    await elixirInit();
-    wasmInitialized = true;
-    log('WASM模块初始化成功');
-    return true;
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    error('WASM模块初始化失败:', errorMessage);
-    return false;
-  }
-}
-
-checkWasm();
-
-
-// 确保在Cordova设备就绪后执行
-document.addEventListener('deviceready', () => {
-  log('Cordova设备就绪，开始执行应用代码');
-  initApp();
-}, false);
-
-
-// 应用初始化函数
-async function initApp() {
-  log('初始化Cordova应用');
-  await checkWasm();
-  
-  // 首先检查网络连接状态
-  const isOnline = await checkNetworkConnection();
-  log(`网络连接状态: ${isOnline ? '在线' : '离线'}`);
-  
-  if (!isOnline) {
-    // 无网络时，优先尝试执行处理过的文件，如果不存在则执行原始文件
-    log('无网络连接，优先尝试执行处理过的文件');
-    const executeResult = await executeProcessedOrLatestJs();
-    if (executeResult.success) {
-      log('成功执行本地JS文件');
-    } else {
-      log(`执行本地JS文件失败: ${executeResult.error || '未知错误'}`);
-      // 如果执行失败，可以尝试直接读取latest.js作为备选
-      const localFileResult = await readLocalLatestJsAndComputeMD5();
-      if (localFileResult.success && localFileResult.content) {
-        log('尝试直接执行latest.js作为备选');
-        const directExecuteResult = executeJavaScriptCode(localFileResult.content);
-        if (directExecuteResult.success) {
-          log('备选执行成功');
-        } else {
-          log(`备选执行失败: ${directExecuteResult.error}`);
-        }
-      }
-    }
-  } else {
-    // 有网络时，执行完整的检查和更新流程
-    log('有网络连接，执行完整的检查和更新流程');
-    updateModule.checkAndExecuteLatestJs();
-  }
-  (window as any).ELIXIR = {
-    // 通知功能
-    showNotification: (message: string) => {
-      log(`显示通知: ${message}`);
-      if ((window as any).cordova?.plugins?.notification) {
-        (window as any).cordova.plugins.notification.local.schedule({
-          title: 'Cordova应用',
-          text: message
-        });
-      }
-    },
-    
-    getDeviceInfo: () => {
-      if ((window as any).device) {
-        const device = (window as any).device;
-        return {
-          model: device.model,
-          platform: device.platform,
-          version: device.version,
-          uuid: device.uuid
-        };
-      }
-      return { error: 'Device plugin not available' };
-    },
-    
-    computeMD5: (text: string): string => {
-      if (!wasmInitialized) {
-        error('WASM模块尚未初始化，无法计算MD5');
-        return '';
-      }
-      try {
-          const md5Result = compute_md5(text);
-          log(`计算MD5成功: ${text} -> ${md5Result}`);
-          return md5Result;
-        } catch (err) {
-          error('计算MD5失败:', err);
-          return '';
-        }
-    },
-    
-    // 日志功能 - 从logger模块导入
-    logger: {
-      // 日志记录方法
-      log,
-      info,
-      warn,
-      error,
-      debug,
-      
-      // 日志管理方法
-      getLogs,
-      getLatestLogs,
-      getLogsByTimeRange,
-      clearLogs,
-      setMaxLogs,
-      exportLogsAsJSON,
-      searchLogs,
-      
-      // 日志级别枚举
-      LogLevel
-    },
-    
-    // 文件操作功能 - 从file模块导入
-    file: {
-      // 文件ID管理
-      rfid: fileModule.rfid,
-      gcFid: fileModule.gcFid,
-      fidMap: fileModule.fidMap,
-      isValidFid: fileModule.isValidFid,
-      
-      // 文件操作函数
-      openFileUrl: fileModule.openFileUrl,
-      checkIsDir: fileModule.checkIsDir,
-      checkIsFile: fileModule.checkIsFile,
-      newFile: fileModule.newFile,
-      newDir: fileModule.newDir,
-      openChildrenFile: fileModule.openChildrenFile,
-      openChildrenDir: fileModule.openChildrenDir,
-      getChildrens: fileModule.getChildrens,
-      removeFile: fileModule.removeFile,
-      readFile: fileModule.readFile,
-      writeFile: fileModule.writeFile
-    },
-    
-    // 网络状态功能 - 从network模块导入
-    network: {
-      // WiFi网络信息
-      getWiFiIPAddress: networkModule.getWiFiIPAddress,
-      getWiFiSubnet: networkModule.getWiFiSubnet,
-      getWiFiGateway: networkModule.getWiFiGateway,
-      getWiFiMac: networkModule.getWiFiMac,
-      getWiFiInfo: networkModule.getWiFiInfo,
-      
-      // 移动网络信息
-      getCarrierIPAddress: networkModule.getCarrierIPAddress,
-      getCarrierSubnet: networkModule.getCarrierSubnet,
-      getCarrierGateway: networkModule.getCarrierGateway,
-      getCarrierMac: networkModule.getCarrierMac,
-      getCarrierInfo: networkModule.getCarrierInfo,
-      
-      // 获取所有网络信息
-      getAllNetworkInfo: networkModule.getAllNetworkInfo,
-      
-      // 检查网络连接状态
-      checkNetworkConnection: checkNetworkConnection
-    },
-    
-    // 更新功能 - 从update模块导入
-    update: updateModule
-  };
 }

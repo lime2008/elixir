@@ -21,10 +21,11 @@ module.exports = {
   output: {
     filename: 'bundle.js',
     path: path.resolve(__dirname, 'dist'),
-    library: 'CordovaApp',
+    //library: 'CordovaApp',
     libraryTarget: 'umd',
     globalObject: 'this',
-    clean: true
+    clean: true,
+    pathinfo: false,
   },
       optimization: {
       minimize: true,  // 强制启用压缩，即使在development模式下
