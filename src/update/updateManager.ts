@@ -436,17 +436,23 @@ export async function processLatestJsWithResources(content: string): Promise<typ
       const urlMappings: { [key: string]: string } = {};
       let allDownloaded = true;
       
-      for (const resourceUrl of resourceUrls) {
+      // 并行下载所有资源，提高效率
+      const downloadPromises = resourceUrls.map(async (resourceUrl) => {
         const downloadResult = await downloadResourceToLocal(resourceUrl);
         if (downloadResult.success && downloadResult.localPath) {
           urlMappings[resourceUrl] = downloadResult.localPath;
           log(`成功下载并映射资源: ${resourceUrl} -> ${downloadResult.localPath}`);
+          return true;
         } else {
           log(`资源下载失败: ${resourceUrl}, 错误: ${downloadResult.error}`);
-          allDownloaded = false;
-          // 继续尝试下载其他资源，但标记整体为部分失败
+          return false;
         }
-      }
+      });
+      
+      // 等待所有下载完成
+      const downloadResults = await Promise.all(downloadPromises);
+      // 检查是否所有资源都下载成功
+      allDownloaded = downloadResults.every(result => result);
       
       // 5. 替换内容中的URL
       let processedContent = content;
@@ -502,26 +508,27 @@ export async function createResourceDirectories(): Promise<void> {
         return;
       }
       
-
-fileModule.newDir(dirFid, false, RESOURCE_DIRS.JS, (result) => {
-  if (!result.s) {
-    return;
-  }
-  const jsFid = result.fid;
-  fileModule.newDir(dirFid, false, RESOURCE_DIRS.CSS, (result) => {
-    if (!result.s) return;
-    const cssFid = result.fid;
-    fileModule.newDir(dirFid, false, RESOURCE_DIRS.IMAGES.JPG, (result) => {
-      if (!result.s) return;
-      const jpgFid = result.fid;
-      fileModule.newDir(dirFid, false, RESOURCE_DIRS.IMAGES.PNG, (result) => {
-        if (!result.s) return;
-        const pngFid = result.fid;
-        resolve();
+      // 创建所有资源目录，使用并行方式，不依赖顺序
+      const directories = [
+        RESOURCE_DIRS.JS,
+        RESOURCE_DIRS.CSS,
+        RESOURCE_DIRS.IMAGES.JPG,
+        RESOURCE_DIRS.IMAGES.PNG
+      ];
+      
+      let createdCount = 0;
+      let totalDirectories = directories.length;
+      
+      const createDirCallback = (result: any) => {
+        createdCount++;
+        if (createdCount === totalDirectories) {
+          resolve();
+        }
+      };
+      
+      directories.forEach(dir => {
+        fileModule.newDir(dirFid, false, dir, createDirCallback);
       });
-    });
-  });
-});
     });
   });
 }
@@ -567,19 +574,24 @@ export async function downloadResourceToLocal(resourceUrl: string): Promise<type
       let resourceType = '';
       let localDir = '';
       
-      if (resourceUrl.match(/\.jsx?$/i)) {
+      // 处理包含查询参数的URL，先去掉查询参数再匹配扩展名
+      const urlWithoutParams = resourceUrl.split('?')[0];
+      
+      if (urlWithoutParams.match(/\.jsx?$/i)) {
         resourceType = 'JS';
         localDir = RESOURCE_DIRS.JS;
-      } else if (resourceUrl.match(/\.css$/i)) {
+      } else if (urlWithoutParams.match(/\.css$/i)) {
         resourceType = 'CSS';
         localDir = RESOURCE_DIRS.CSS;
-      } else if (resourceUrl.match(/\.jpg$/i)) {
+      } else if (urlWithoutParams.match(/\.jpg$/i) || urlWithoutParams.match(/\.jpeg$/i)) {
         resourceType = 'JPG';
         localDir = RESOURCE_DIRS.IMAGES.JPG;
-      } else if (resourceUrl.match(/\.png$/i)) {
+      } else if (urlWithoutParams.match(/\.png$/i)) {
         resourceType = 'PNG';
         localDir = RESOURCE_DIRS.IMAGES.PNG;
       } else {
+        // 记录不支持的资源类型，但不直接返回错误，而是记录日志后继续
+        log(`不支持的资源类型: ${resourceUrl}`);
         resolve({ success: false, error: `不支持的资源类型: ${resourceUrl}` });
         return;
       }
