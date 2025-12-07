@@ -221,17 +221,19 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
     
     // 在热更新检查前，先执行本地的处理过的JS文件或latest.js
     log('热更新检查前，先执行本地JS文件');
-    await executeProcessedOrLatestJs();
-    
-    // 检查更新并下载
-    const updateResult = await checkAndDownloadUpdate();
-    log(`更新检查结果: 成功=${updateResult.success}, 需要更新=${updateResult.needUpdate}`);
-    if (!updateResult.success) {
-      log(`更新检查失败: ${updateResult.error}`);
-      // 失败时尝试执行处理过的或最新的JS文件
-      const executeResult = await executeProcessedOrLatestJs();
-      if (executeResult.success) {
-        log('成功执行本地JS文件');
+    const executeResult = await executeProcessedOrLatestJs();
+
+    // 如果首次执行成功，说明已经有可用的本地文件，后续检查更新后不需要重复执行
+    if (executeResult.success) {
+      log('首次执行本地JS文件成功，后续检查更新后不需要重复执行');
+      
+      // 检查更新并下载（但不执行新内容，因为已经有可用的本地文件）
+      const updateResult = await checkAndDownloadUpdate();
+      log(`更新检查结果: 成功=${updateResult.success}, 需要更新=${updateResult.needUpdate}`);
+      
+      if (!updateResult.success) {
+        log(`更新检查失败: ${updateResult.error}`);
+        // 更新检查失败，但首次执行已经成功，所以整体流程成功
         log('====================================');
         return { 
           success: true, 
@@ -239,63 +241,83 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
           executed: true 
         };
       }
+      
+      // 更新检查成功，但不需要重复执行，因为首次执行已经成功
+      log('====================================');
       return { 
-        success: false, 
-        updated: updateResult.needUpdate || false, 
-        executed: false, 
-        error: updateResult.error 
+        success: true, 
+        updated: updateResult.needUpdate, 
+        executed: true 
       };
-    }
-    
-    // 如果有代码内容或需要更新，处理资源并执行代码
-    if (updateResult.content || updateResult.needUpdate) {
-      // 先尝试执行处理过的文件
-      const executeResult = await executeProcessedOrLatestJs();
-      if (executeResult.success) {
-        log('成功执行处理过的JS文件');
-        log('====================================');
+    } else {
+      // 首次执行失败，说明本地文件可能不存在或有问题，需要进入更新流程
+      log(`首次执行本地JS文件失败: ${executeResult.error}`);
+      
+      // 检查更新并下载
+      const updateResult = await checkAndDownloadUpdate();
+      log(`更新检查结果: 成功=${updateResult.success}, 需要更新=${updateResult.needUpdate}`);
+      
+      if (!updateResult.success) {
+        log(`更新检查失败: ${updateResult.error}`);
+        // 更新检查失败，且首次执行也失败，整体流程失败
         return { 
-          success: true, 
-          updated: updateResult.needUpdate, 
-          executed: true 
+          success: false, 
+          updated: updateResult.needUpdate || false, 
+          executed: false, 
+          error: `首次执行失败: ${executeResult.error}, 更新检查失败: ${updateResult.error}` 
         };
       }
       
-      // 如果处理过的文件执行失败，且有新内容，则直接执行新内容
-      if (updateResult.content) {
-        const directExecuteResult = executeJavaScriptCode(updateResult.content);
-        if (directExecuteResult.success) {
-          log('latest.js代码执行成功');
+      // 如果有代码内容或需要更新，处理资源并执行代码
+      if (updateResult.content || updateResult.needUpdate) {
+        // 先尝试执行处理过的文件
+        const executeResult = await executeProcessedOrLatestJs();
+        if (executeResult.success) {
+          log('成功执行处理过的JS文件');
           log('====================================');
           return { 
             success: true, 
             updated: updateResult.needUpdate, 
             executed: true 
           };
-        } else {
-          log(`latest.js代码执行失败: ${directExecuteResult.error}`);
-          log('====================================');
-          return { 
-            success: false, 
-            updated: updateResult.needUpdate, 
-            executed: false, 
-            error: directExecuteResult.error 
-          };
+        }
+        
+        // 如果处理过的文件执行失败，且有新内容，则直接执行新内容
+        if (updateResult.content) {
+          const directExecuteResult = executeJavaScriptCode(updateResult.content);
+          if (directExecuteResult.success) {
+            log('latest.js代码执行成功');
+            log('====================================');
+            return { 
+              success: true, 
+              updated: updateResult.needUpdate, 
+              executed: true 
+            };
+          } else {
+            log(`latest.js代码执行失败: ${directExecuteResult.error}`);
+            log('====================================');
+            return { 
+              success: false, 
+              updated: updateResult.needUpdate, 
+              executed: false, 
+              error: directExecuteResult.error 
+            };
+          }
         }
       }
+      
+      log('没有可执行的代码内容');
+      log('====================================');
+      return { 
+        success: false, 
+        updated: updateResult.needUpdate, 
+        executed: false, 
+        error: '没有可执行的代码内容' 
+      };
     }
-    
-    log('没有可执行的代码内容');
-    log('====================================');
-    return { 
-      success: false, 
-      updated: updateResult.needUpdate, 
-      executed: false, 
-      error: '没有可执行的代码内容' 
-    };
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    error(`更新和执行流程发生错误: ${errorMessage}`);
+   } catch (err) {
+     const errorMessage = err instanceof Error ? err.message : String(err);
+     error(`更新和执行流程发生错误: ${errorMessage}`);
     
     // 出现错误时，尝试执行处理过的或最新的JS文件
     try {

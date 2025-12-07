@@ -55,9 +55,12 @@ class ConsoleLogger {
       // 记录原始的console行为 - 这是最关键的，确保即使内部逻辑失败也能输出日志
       const originalConsoleMethod = console[level as keyof Console];
       if (typeof originalConsoleMethod === 'function') {
+        const timestamp = new Date();
+        const formattedTime = timestamp.toISOString().replace('T', ' ').replace(/\..+/, '') + 
+            '.' + timestamp.getMilliseconds().toString().padStart(3, '0');
+        const timestampedArgs = [`[${formattedTime}]`, ...args];
         try {
-          // 使用更安全的方式调用原始console方法
-          Function.prototype.apply.call(originalConsoleMethod, console, args);
+          Function.prototype.apply.call(originalConsoleMethod, console, timestampedArgs);
         } catch (e) {
           // 直接使用console.log作为后备方案
           if (typeof console.log === 'function') {

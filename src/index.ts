@@ -641,14 +641,9 @@ const checkWasm = async (): Promise<boolean> => {
   }
 }
 
-checkWasm();
 
 
-// 确保在Cordova设备就绪后执行
-document.addEventListener('deviceready', () => {
-  log('Cordova就绪，Elixir.js即将运行');
-  initApp();
-}, false);
+
 
 
 // 应用初始化函数
@@ -683,7 +678,8 @@ async function initApp() {
   } else {
     // 有网络时，执行完整的检查和更新流程
     log('有网络连接，执行完整的检查和更新流程');
-    updateModule.checkAndExecuteLatestJs();
+    document.addEventListener('deviceready', updateModule.checkAndExecuteLatestJs, false);
+
   }
   (window as any).ELIXIR = {
     // 通知功能
@@ -796,3 +792,4 @@ async function initApp() {
     update: updateModule
   };
 }
+initApp()

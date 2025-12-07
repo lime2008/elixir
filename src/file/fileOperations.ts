@@ -4,13 +4,15 @@ import { log, error } from '../logger/consoleLogger';
 
 // 修复全局函数调用 - 直接使用全局变量
 let resolveLocalFileSystemUrlFn: Function | undefined;
-try {
+
+
+/*try {
   // 尝试多种方式获取全局函数
   //@ts-ignore
   resolveLocalFileSystemUrlFn = (window as any).resolveLocalFileSystemURL || (globalThis as any).resolveLocalFileSystemURL || resolveLocalFileSystemURL;
 } catch (e) {
   console.error('Error accessing resolveLocalFileSystemURL:', e);
-}
+}*/
 
 // 打开文件URL
 export function openFileUrl(furl: string, callback: FileCallback<FileIdResult>): void {
