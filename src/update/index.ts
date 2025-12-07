@@ -56,6 +56,7 @@ const updateModule: types.UpdateModule = {
     return { success: false, error: '无法读取本地文件' };
   },
   
+  executeProcessedOrLatestJs,
   // 额外导出这些函数以支持直接调用
   getRemoteVersionInfo,
   downloadLatestJsUpdate

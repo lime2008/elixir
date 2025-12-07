@@ -72,6 +72,8 @@ export interface UpdateModule {
   checkAndExecuteLatestJs: () => Promise<UpdateAndExecuteResult>;
   // 检查更新但不执行
   checkForUpdates: () => Promise<CheckAndDownloadResult>;
+  // 执行处理过的JS文件或最新JS文件
+  executeProcessedOrLatestJs: () => Promise<JavaScriptExecutionResult>;
   // 执行已下载的代码
   executeLatestJs: () => Promise<JavaScriptExecutionResult>;
   getRemoteVersionInfo: () => Promise<RemoteVersionInfo>;

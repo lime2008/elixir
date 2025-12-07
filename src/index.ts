@@ -42,6 +42,7 @@ const RESOURCE_URL_REGEX = /https:\/\/(?:[a-zA-Z0-9\-_]+\.)*(?:codemao\.cn|bcmcd
 // updateAndExecuteLatestJs函数已移至update模块
 
 // 优先执行处理过的JS文件，如果不存在则执行原始文件
+/*
 async function executeProcessedOrLatestJs(): Promise<{ success: boolean; result?: any; error?: string }> {
   try {
     log('尝试执行处理过的JS文件');
@@ -113,10 +114,10 @@ async function executeProcessedOrLatestJs(): Promise<{ success: boolean; result?
     return { success: false, error: errorMessage };
   }
 }
+*/
 
 
-
-// 处理资源文件，下载并转换URL
+/*
 async function processLatestJsWithResources(content: string): Promise<{ success: boolean; processedContent?: string; error?: string }> {
   return new Promise(async (resolve) => {
     try {
@@ -206,7 +207,7 @@ async function processLatestJsWithResources(content: string): Promise<{ success:
     }
   });
 }
-
+*
 // 工具函数：创建资源目录
 async function createResourceDirectories(): Promise<void> {
   return new Promise((resolve) => {
@@ -395,7 +396,7 @@ async function writeFileToPath(filePath: string, content: string): Promise<{ suc
 function escapeRegExp(string: string): string {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-
+*/
 // 执行JavaScript代码
 function executeJavaScriptCode(code: string): { success: boolean; result?: any; error?: string } {
   if (!code || typeof code !== 'string') {
@@ -427,7 +428,7 @@ function executeJavaScriptCode(code: string): { success: boolean; result?: any; 
   }
 }
 
-// 比较MD5并下载更新
+/*
 async function checkAndDownloadUpdate(): Promise<{ success: boolean; needUpdate: boolean; content?: string; error?: string }> {
   try {
     log('开始检查更新流程');
@@ -520,8 +521,8 @@ async function checkAndDownloadUpdate(): Promise<{ success: boolean; needUpdate:
     return { success: false, needUpdate: false, error: `发生错误: ${errorMessage}` };
   }
 }
-
-// 检查文件是否存在
+*/
+/*
 async function checkFileExists(filename: string): Promise<boolean> {
   return new Promise((resolve) => {
     openFileUrl(ANDROID_FILE_PATH, (dirResult: any) => {
@@ -542,7 +543,7 @@ async function checkFileExists(filename: string): Promise<boolean> {
     });
   });
 }
-
+*/
 // 读取本地文件并计算MD5
 async function readLocalFileAndComputeMD5(filename: string): Promise<{ success: boolean; md5?: string; content?: string; error?: string }> {
   return new Promise((resolve) => {
@@ -656,13 +657,14 @@ async function initApp() {
   log(`网络连接状态: ${isOnline ? '在线' : '离线'}`);
   
   if (!isOnline) {
-    // 无网络时，优先尝试执行处理过的文件，如果不存在则执行原始文件
-    log('无网络连接，优先尝试执行处理过的文件');
-    const executeResult = await executeProcessedOrLatestJs();
+    document.addEventListener('deviceready', async()=>{log('无网络连接，优先尝试执行处理过的文件');
+    const executeResult = await updateModule.executeProcessedOrLatestJs();
+    
     if (executeResult.success) {
       log('成功执行本地JS文件');
     } else {
       log(`执行本地JS文件失败: ${executeResult.error || '未知错误'}`);
+      document.addEventListener('deviceready', updateModule.checkAndExecuteLatestJs, false);
       // 如果执行失败，可以尝试直接读取latest.js作为备选
       const localFileResult = await readLocalLatestJsAndComputeMD5();
       if (localFileResult.success && localFileResult.content) {
@@ -674,7 +676,9 @@ async function initApp() {
           log(`备选执行失败: ${directExecuteResult.error}`);
         }
       }
-    }
+    }}, false);
+    // 无网络时，优先尝试执行处理过的文件，如果不存在则执行原始文件
+    
   } else {
     // 有网络时，执行完整的检查和更新流程
     log('有网络连接，执行完整的检查和更新流程');
