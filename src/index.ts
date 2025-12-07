@@ -34,8 +34,7 @@ const RESOURCE_DIRS = {
 };
 
 // 资源URL匹配正则表达式
-const RESOURCE_URL_REGEX = /https:\/\/(?:[a-zA-Z0-9\-_]+\.)*codemao\.cn\/[a-zA-Z0-9\-_\.\/]+(?:\.jsx?|\.css|\.png|\.jpg)(?:\?[a-zA-Z0-9\-_=&]*)?/g;
-
+const RESOURCE_URL_REGEX = /https:\/\/(?:[a-zA-Z0-9\-_]+\.)*(?:codemao\.cn|bcmcdn\.com)\/[a-zA-Z0-9\-_\.\/]+(?:\.jsx?|\.css|\.png|\.jpg|\.jpeg|\.gif|\.svg|\.webp)(?:\?[a-zA-Z0-9\-_=&]*)?/gi;
 // 更新逻辑已移至update模块
 
 // getRemoteVersionInfo函数已移至update模块
@@ -647,7 +646,7 @@ checkWasm();
 
 // 确保在Cordova设备就绪后执行
 document.addEventListener('deviceready', () => {
-  log('Cordova设备就绪，开始执行应用代码');
+  log('Cordova就绪，Elixir.js即将运行');
   initApp();
 }, false);
 

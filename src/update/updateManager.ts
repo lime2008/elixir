@@ -28,8 +28,7 @@ const RESOURCE_DIRS = {
 };
 
 // 资源URL匹配正则表达式
-const RESOURCE_URL_REGEX = /https:\/\/(?:[a-zA-Z0-9\-_]+\.)*codemao\.cn\/[a-zA-Z0-9\-_\.\/]+(?:\.jsx?|\.css|\.png|\.jpg)(?:\?[a-zA-Z0-9\-_=&]*)?/g;
-
+const RESOURCE_URL_REGEX = /https:\/\/(?:[a-zA-Z0-9\-_]+\.)*(?:codemao\.cn|bcmcdn\.com)\/[a-zA-Z0-9\-_\.\/]+(?:\.jsx?|\.css|\.png|\.jpg|\.jpeg|\.gif|\.svg|\.webp)(?:\?[a-zA-Z0-9\-_=&]*)?/gi;
 // WASM初始化状态
 let wasmInitialized = false;
 
@@ -219,6 +218,10 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
         error: 'WASM模块初始化失败，无法进行MD5计算' 
       };
     }
+    
+    // 在热更新检查前，先执行本地的处理过的JS文件或latest.js
+    log('热更新检查前，先执行本地JS文件');
+    await executeProcessedOrLatestJs();
     
     // 检查更新并下载
     const updateResult = await checkAndDownloadUpdate();
