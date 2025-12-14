@@ -68,12 +68,43 @@ export interface FileWriteResult {
   error?: string;
 }
 
+// 更新检查结果（仅MD5比较）
+export interface UpdateCheckResult {
+  success: boolean;
+  needUpdate: boolean;
+  localMd5?: string;
+  remoteMd5?: string;
+  isForced?: boolean;
+  error?: string;
+}
+
+// 更新进度状态
+export enum UpdateStep {
+  IDLE = 'idle',
+  DOWNLOADING_JS = 'downloading_js',
+  PROCESSING_RESOURCES = 'processing_resources',
+  EXECUTING_CODE = 'executing_code',
+  COMPLETED = 'completed',
+  FAILED = 'failed'
+}
+
+// 更新进度信息
+export interface UpdateProgress {
+  isUpdating: boolean;
+  currentStep: UpdateStep;
+  progressPercentage: number;
+  stepDescription: string;
+  error?: string;
+}
+
 // 更新模块接口
 export interface UpdateModule {
   // 主更新触发函数
   checkAndExecuteLatestJs: () => Promise<UpdateAndExecuteResult>;
   // 检查更新但不执行
   checkForUpdates: () => Promise<CheckAndDownloadResult>;
+  // 单纯的MD5比较检查
+  checkUpdateNeed: () => Promise<UpdateCheckResult>;
   // 执行处理过的JS文件或最新JS文件
   executeProcessedOrLatestJs: () => Promise<JavaScriptExecutionResult>;
   // 读取本地文件并计算MD5
@@ -84,4 +115,6 @@ export interface UpdateModule {
   executeLatestJs: () => Promise<JavaScriptExecutionResult>;
   getRemoteVersionInfo: () => Promise<RemoteVersionInfo>;
   downloadLatestJsUpdate: (url: string) => Promise<DownloadResult>;
+  // 获取更新进度
+  getUpdateProgress: () => UpdateProgress;
 }

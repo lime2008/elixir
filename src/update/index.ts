@@ -16,7 +16,9 @@ import {
   checkAndDownloadUpdate,
   checkFileExists,
   readLocalFileAndComputeMD5,
-  readLocalLatestJsAndComputeMD5
+  readLocalLatestJsAndComputeMD5,
+  checkUpdateNeed,
+  getUpdateProgress
 } from './updateManager';
 
 
@@ -28,6 +30,7 @@ const updateModule: types.UpdateModule = {
     await checkWasm();
     return checkAndDownloadUpdate(true);
   },
+  checkUpdateNeed,
   executeLatestJs: async () => {
     const localFileResult = await readLocalLatestJsAndComputeMD5();
     if (localFileResult.success && localFileResult.content) {
@@ -39,7 +42,8 @@ const updateModule: types.UpdateModule = {
   readLocalFileAndComputeMD5,
   executeProcessedOrLatestJs,
   getRemoteVersionInfo,
-  downloadLatestJsUpdate
+  downloadLatestJsUpdate,
+  getUpdateProgress
 };
 
 

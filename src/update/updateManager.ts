@@ -3,7 +3,7 @@ import { compute_md5, initSync } from '../wasm/elixir';
 import elixirInit from '../wasm/elixir';
 import { openFileUrl, readFile, openChildrenFile, newFile, writeFile } from '../file/fileOperations';
 import { downloadResourceToDirectory } from '../file/download';
-import { log, error, info, warn, debug } from '../logger/consoleLogger';
+import { log, error } from '../logger/consoleLogger';
 import { checkNetworkConnection } from '../network';
 import * as fileModule from '../file';
 import * as networkModule from '../network';
@@ -31,6 +31,21 @@ const RESOURCE_DIRS = {
 const RESOURCE_URL_REGEX = /https:\/\/(?:[a-zA-Z0-9\-_]+\.)*(?:codemao\.cn|bcmcdn\.com)\/[a-zA-Z0-9\-_\.\/]+(?:\.jsx?|\.css|\.png|\.jpg|\.jpeg|\.gif|\.svg|\.webp)(?:\?[a-zA-Z0-9\-_=&]*)?/gi;
 // WASM初始化状态
 let wasmInitialized = false;
+
+// 更新进度状态
+let currentUpdateProgress: types.UpdateProgress = {
+  isUpdating: false,
+  currentStep: types.UpdateStep.IDLE,
+  progressPercentage: 0,
+  stepDescription: '空闲状态'
+};
+
+// 资源处理进度跟踪
+let resourceProcessingProgress = {
+  totalResources: 0,
+  downloadedResources: 0,
+  currentResourceUrl: ''
+};
 
 /**
  * 检查WASM模块是否初始化
@@ -60,15 +75,20 @@ export async function downloadLatestJsUpdate(url: string): Promise<types.Downloa
   return new Promise(async (resolve) => {
     log(`开始下载更新文件: ${url}`);
     
+    // 更新进度状态
+    updateProgress(types.UpdateStep.DOWNLOADING_JS, 0, '开始下载远程JS文件');
+    
     // 使用downloadResourceToDirectory函数下载文件到指定目录
     downloadResourceToDirectory(url, ANDROID_FILE_PATH, async (result) => {
       if (!result.s) {
         error(`下载更新文件失败: ${JSON.stringify(result.err)}`);
+        updateProgress(types.UpdateStep.FAILED, 0, '下载远程JS文件失败', `下载失败: ${JSON.stringify(result.err)}`);
         resolve({ success: false, error: `下载失败: ${JSON.stringify(result.err)}` });
         return;
       }
       
       log('更新文件下载成功');
+      updateProgress(types.UpdateStep.DOWNLOADING_JS, 50, '远程JS文件下载完成，开始处理资源');
       
       // 尝试删除旧的处理文件和锁文件
       try {
@@ -115,15 +135,19 @@ export async function downloadLatestJsUpdate(url: string): Promise<types.Downloa
             // 如果有内容，处理资源文件
             if (content) {
               log('开始处理资源文件');
+              updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 60, '开始处理资源文件');
               const processResult = await processLatestJsWithResources(content);
               if (processResult.success) {
                 log('资源文件处理成功');
+                updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 100, '资源文件处理完成');
               } else {
                 log(`资源文件处理失败: ${processResult.error}`);
                 // 处理失败不影响更新，只是不会生成processed文件
+                updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 100, '资源文件处理完成（部分失败）');
               }
             }
             
+            updateProgress(types.UpdateStep.COMPLETED, 100, '更新流程完成');
             resolve({ success: true, content });
           });
         });
@@ -197,14 +221,20 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
     log('====================================');
     log('开始执行更新和代码加载流程');
     
+    // 重置进度状态
+    resetProgress();
+    
     // 确保WASM模块已初始化（用于MD5计算）
+    updateProgress(types.UpdateStep.IDLE, 5, '初始化WASM模块');
     const wasmReady = await checkWasm();
     if (!wasmReady) {
       log('WASM初始化失败，无法进行MD5计算');
+      updateProgress(types.UpdateStep.FAILED, 0, 'WASM初始化失败', 'WASM模块初始化失败，无法进行MD5计算');
       // 即使WASM初始化失败，也尝试执行处理过的或最新的JS文件
       const executeResult = await executeProcessedOrLatestJs();
       if (executeResult.success) {
         log('成功执行本地JS文件');
+        updateProgress(types.UpdateStep.COMPLETED, 100, '更新流程完成（使用本地文件）');
         log('====================================');
         return { 
           success: true, 
@@ -222,18 +252,22 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
     
     // 在热更新检查前，先执行本地的处理过的JS文件或latest.js
     log('热更新检查前，先执行本地JS文件');
+    updateProgress(types.UpdateStep.EXECUTING_CODE, 10, '执行本地JS文件');
     const executeResult = await executeProcessedOrLatestJs();
 
     // 如果首次执行成功，说明已经有可用的本地文件，后续检查更新后不需要重复执行
     if (executeResult.success) {
       log('首次执行本地JS文件成功，后续检查更新后不需要重复执行');
+      updateProgress(types.UpdateStep.EXECUTING_CODE, 50, '本地JS文件执行成功，检查更新');
       
       // 检查更新并下载（但不执行新内容，因为已经有可用的本地文件）
+      updateProgress(types.UpdateStep.IDLE, 60, '检查远程更新');
       const updateResult = await checkAndDownloadUpdate(true);
       log(`更新检查结果: 成功=${updateResult.success}, 需要更新=${updateResult.needUpdate}, 强制更新=${updateResult.isForced}`);
       
       if (!updateResult.success) {
         log(`更新检查失败: ${updateResult.error}`);
+        updateProgress(types.UpdateStep.COMPLETED, 100, '更新流程完成（检查失败但本地文件可用）');
         // 更新检查失败，但首次执行已经成功，所以整体流程成功
         log('====================================');
         return { 
@@ -244,6 +278,7 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
       }
       
       // 更新检查成功，但不需要重复执行，因为首次执行已经成功
+      updateProgress(types.UpdateStep.COMPLETED, 100, '更新流程完成');
       log('====================================');
       return { 
         success: true, 
@@ -253,13 +288,16 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
     } else {
       // 首次执行失败，说明本地文件可能不存在或有问题，需要进入更新流程
       log(`首次执行本地JS文件失败: ${executeResult.error}`);
+      updateProgress(types.UpdateStep.IDLE, 20, '本地文件不可用，开始更新流程');
       
       // 检查更新并下载
+      updateProgress(types.UpdateStep.IDLE, 30, '检查远程更新');
       const updateResult = await checkAndDownloadUpdate(false);
       log(`更新检查结果: 成功=${updateResult.success}, 需要更新=${updateResult.needUpdate}`);
       
       if (!updateResult.success) {
         log(`更新检查失败: ${updateResult.error}`);
+        updateProgress(types.UpdateStep.FAILED, 0, '更新检查失败', `首次执行失败: ${executeResult.error}, 更新检查失败: ${updateResult.error}`);
         // 更新检查失败，且首次执行也失败，整体流程失败
         return { 
           success: false, 
@@ -272,9 +310,11 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
       // 如果有代码内容或需要更新，处理资源并执行代码
       if (updateResult.content || updateResult.needUpdate) {
         // 先尝试执行处理过的文件
+        updateProgress(types.UpdateStep.EXECUTING_CODE, 80, '执行处理过的JS文件');
         const executeResult = await executeProcessedOrLatestJs();
         if (executeResult.success) {
           log('成功执行处理过的JS文件');
+          updateProgress(types.UpdateStep.COMPLETED, 100, '更新流程完成');
           log('====================================');
           return { 
             success: true, 
@@ -285,9 +325,11 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
         
         // 如果处理过的文件执行失败，且有新内容，则直接执行新内容
         if (updateResult.content) {
+          updateProgress(types.UpdateStep.EXECUTING_CODE, 90, '执行最新JS文件');
           const directExecuteResult = executeJavaScriptCode(updateResult.content);
           if (directExecuteResult.success) {
             log('latest.js代码执行成功');
+            updateProgress(types.UpdateStep.COMPLETED, 100, '更新流程完成');
             log('====================================');
             return { 
               success: true, 
@@ -296,6 +338,7 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
             };
           } else {
             log(`latest.js代码执行失败: ${directExecuteResult.error}`);
+            updateProgress(types.UpdateStep.FAILED, 0, '代码执行失败', directExecuteResult.error);
             log('====================================');
             return { 
               success: false, 
@@ -308,6 +351,7 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
       }
       
       log('没有可执行的代码内容');
+      updateProgress(types.UpdateStep.FAILED, 0, '没有可执行的代码内容');
       log('====================================');
       return { 
         success: false, 
@@ -430,47 +474,86 @@ export async function processLatestJsWithResources(content: string): Promise<typ
       log('开始处理latest.js中的资源文件');
       
       // 1. 删除旧的processed文件和lock文件
+      updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 0, '清理旧文件');
       await deleteFileIfExists(LATEST_PROCESSED_FILE);
       await deleteFileIfExists(LOCK_FILE);
       
       // 2. 提取所有匹配的资源URL
+      updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 10, '分析资源URL');
       const resourceUrls = Array.from(content.matchAll(RESOURCE_URL_REGEX), match => match[0]);
       log(`发现 ${resourceUrls.length} 个需要处理的资源URL`);
       
+      // 初始化资源处理进度
+      resourceProcessingProgress = {
+        totalResources: resourceUrls.length,
+        downloadedResources: 0,
+        currentResourceUrl: ''
+      };
+      
       if (resourceUrls.length === 0) {
           // 没有资源需要处理，直接创建processed文件
+          updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 50, '没有资源需要处理，创建文件');
           const writeResult = await writeFileToPath(`${ANDROID_FILE_PATH}${LATEST_PROCESSED_FILE}`, content);
           if (!writeResult.success) {
+            updateProgress(types.UpdateStep.FAILED, 0, '写入processed文件失败', `写入processed文件失败: ${writeResult.error}`);
             return resolve({ success: false, error: `写入processed文件失败: ${writeResult.error}` });
           }
           
           // 创建lock文件
+          updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 80, '创建锁文件');
           const lockResult = await writeFileToPath(`${ANDROID_FILE_PATH}${LOCK_FILE}`, '');
           if (!lockResult.success) {
             // 如果lock文件创建失败，删除已创建的processed文件
             await deleteFileIfExists(LATEST_PROCESSED_FILE);
+            updateProgress(types.UpdateStep.FAILED, 0, '创建锁文件失败', `创建lock文件失败: ${lockResult.error}`);
             return resolve({ success: false, error: `创建lock文件失败: ${lockResult.error}` });
           }
-        
+          
+          updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 100, '资源处理完成（无资源）');
         return resolve({ success: true, processedContent: content });
       }
       
       // 3. 创建资源目录
+      updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 20, '创建资源目录');
       await createResourceDirectories();
       
       // 4. 下载资源并构建URL映射
+      updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 30, '开始下载资源文件');
       const urlMappings: { [key: string]: string } = {};
       let allDownloaded = true;
       
       // 并行下载所有资源，提高效率
-      const downloadPromises = resourceUrls.map(async (resourceUrl) => {
+      const downloadPromises = resourceUrls.map(async (resourceUrl, index) => {
+        // 更新当前下载的资源URL
+        resourceProcessingProgress.currentResourceUrl = resourceUrl;
+        
         const downloadResult = await downloadResourceToLocal(resourceUrl);
         if (downloadResult.success && downloadResult.localPath) {
           urlMappings[resourceUrl] = downloadResult.localPath;
           log(`成功下载并映射资源: ${resourceUrl} -> ${downloadResult.localPath}`);
+          
+          // 更新下载进度
+          resourceProcessingProgress.downloadedResources++;
+          const progress = 30 + Math.floor((resourceProcessingProgress.downloadedResources / resourceProcessingProgress.totalResources) * 50);
+          updateProgress(
+            types.UpdateStep.PROCESSING_RESOURCES, 
+            progress, 
+            `下载资源中 (${resourceProcessingProgress.downloadedResources}/${resourceProcessingProgress.totalResources})`
+          );
+          
           return true;
         } else {
           log(`资源下载失败: ${resourceUrl}, 错误: ${downloadResult.error}`);
+          
+          // 更新下载进度（即使失败也计数）
+          resourceProcessingProgress.downloadedResources++;
+          const progress = 30 + Math.floor((resourceProcessingProgress.downloadedResources / resourceProcessingProgress.totalResources) * 50);
+          updateProgress(
+            types.UpdateStep.PROCESSING_RESOURCES, 
+            progress, 
+            `下载资源中 (${resourceProcessingProgress.downloadedResources}/${resourceProcessingProgress.totalResources}) - 部分失败`
+          );
+          
           return false;
         }
       });
@@ -481,26 +564,32 @@ export async function processLatestJsWithResources(content: string): Promise<typ
       allDownloaded = downloadResults.every(result => result);
       
       // 5. 替换内容中的URL
+      updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 85, '替换资源URL');
       let processedContent = content;
       for (const [originalUrl, localPath] of Object.entries(urlMappings)) {
         processedContent = processedContent.replace(new RegExp(escapeRegExp(originalUrl), 'g'), localPath);
       }
       
       // 6. 写入processed文件
+      updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 90, '写入处理后的文件');
       const writeResult = await writeFileToPath(`${ANDROID_FILE_PATH}${LATEST_PROCESSED_FILE}`, processedContent);
       if (!writeResult.success) {
+        updateProgress(types.UpdateStep.FAILED, 0, '写入processed文件失败', `写入processed文件失败: ${writeResult.error}`);
         return resolve({ success: false, error: `写入processed文件失败: ${writeResult.error}` });
       }
       
       // 7. 创建lock文件
+      updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 95, '创建锁文件');
       const lockResult = await writeFileToPath(`${ANDROID_FILE_PATH}${LOCK_FILE}`, '');
       if (!lockResult.success) {
         // 如果lock文件创建失败，删除已创建的processed文件
         await deleteFileIfExists(LATEST_PROCESSED_FILE);
+        updateProgress(types.UpdateStep.FAILED, 0, '创建锁文件失败', `创建lock文件失败: ${lockResult.error}`);
         return resolve({ success: false, error: `创建lock文件失败: ${lockResult.error}` });
       }
       
       log(`资源处理完成，${allDownloaded ? '所有' : '部分'}资源下载成功`);
+      updateProgress(types.UpdateStep.PROCESSING_RESOURCES, 100, '资源处理完成');
       return resolve({ success: true, processedContent });
       
     } catch (err) {
@@ -509,6 +598,7 @@ export async function processLatestJsWithResources(content: string): Promise<typ
       // 清理可能创建的文件
       await deleteFileIfExists(LATEST_PROCESSED_FILE);
       await deleteFileIfExists(LOCK_FILE);
+      updateProgress(types.UpdateStep.FAILED, 0, '资源处理失败', errorMessage);
       return resolve({ success: false, error: errorMessage });
     }
   });
@@ -588,6 +678,41 @@ export async function deleteFileIfExists(filename: string): Promise<void> {
       });
     });
   });
+}
+
+/**
+ * 获取更新进度信息
+ */
+export function getUpdateProgress(): types.UpdateProgress {
+  return { ...currentUpdateProgress };
+}
+
+/**
+ * 更新进度状态
+ */
+function updateProgress(step: types.UpdateStep, percentage: number, description: string, error?: string) {
+  currentUpdateProgress = {
+    isUpdating: step !== types.UpdateStep.IDLE && step !== types.UpdateStep.COMPLETED && step !== types.UpdateStep.FAILED,
+    currentStep: step,
+    progressPercentage: percentage,
+    stepDescription: description,
+    error: error
+  };
+  
+  // 记录进度日志
+  log(`更新进度: ${step} (${percentage}%) - ${description}`);
+}
+
+/**
+ * 重置进度状态
+ */
+function resetProgress() {
+  updateProgress(types.UpdateStep.IDLE, 0, '空闲状态');
+  resourceProcessingProgress = {
+    totalResources: 0,
+    downloadedResources: 0,
+    currentResourceUrl: ''
+  };
 }
 
 /**
@@ -1008,7 +1133,97 @@ export async function readLocalFileAndComputeMD5(filename: string): Promise<type
 }
 
 /**
- * 读取本地latest.js文件并计算MD5
+ * 单纯的MD5比较检查，不进行下载或执行
+ */
+export async function checkUpdateNeed(): Promise<types.UpdateCheckResult> {
+  try {
+    log('开始单纯的MD5比较检查');
+    
+    // 检查网络连接
+    const isOnline = await checkNetworkConnection();
+    log(`网络连接状态: ${isOnline ? '在线' : '离线'}`);
+    
+    if (!isOnline) {
+      log('没有网络连接，无法进行MD5比较');
+      return { success: false, needUpdate: false, error: '没有网络连接' };
+    }
+    
+    // 读取本地文件并计算MD5
+    log('开始读取本地文件并计算MD5');
+    const localFileResult = await readLocalLatestJsAndComputeMD5();
+    
+    let localMd5 = '';
+    if (localFileResult.success && localFileResult.md5) {
+      log(`本地文件MD5: ${localFileResult.md5}`);
+      localMd5 = localFileResult.md5;
+    } else {
+      log('本地文件不存在或读取失败，需要下载');
+      // 本地文件不存在，需要更新
+      return { 
+        success: true, 
+        needUpdate: true, 
+        localMd5: '',
+        remoteMd5: '',
+        error: localFileResult.error
+      };
+    }
+    
+    // 获取远程版本信息
+    log('开始获取远程版本信息');
+    const remoteVersionResult = await getRemoteVersionInfo();
+    
+    if (!remoteVersionResult.success) {
+      log(`获取远程版本信息失败: ${remoteVersionResult.error}`);
+      return { 
+        success: false, 
+        needUpdate: false, 
+        localMd5,
+        error: remoteVersionResult.error 
+      };
+    }
+    
+    const remoteMd5 = remoteVersionResult.md5 || '';
+    log(`远程文件MD5: ${remoteMd5}, 强制更新: ${remoteVersionResult.isForced}`);
+    
+    // 检查强制更新
+    if (remoteVersionResult.isForced) {
+      log('检测到强制更新标志，需要更新');
+      return { 
+        success: true, 
+        needUpdate: true, 
+        localMd5,
+        remoteMd5,
+        isForced: true 
+      };
+    }
+    
+    // 比较MD5
+    log(`比较MD5: 本地=${localMd5}, 远程=${remoteMd5}`);
+    const needUpdate = localMd5 !== remoteMd5;
+    
+    if (needUpdate) {
+      log('发现新版本，需要更新');
+    } else {
+      log('本地文件已是最新版本，无需更新');
+    }
+    
+    return { 
+      success: true, 
+      needUpdate,
+      localMd5,
+      remoteMd5,
+      isForced: remoteVersionResult.isForced 
+    };
+    
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    error(`MD5比较检查时发生错误: ${errorMessage}`);
+    return { success: false, needUpdate: false, error: `发生错误: ${errorMessage}` };
+  }
+}
+
+/**
+ * 读取本地文件并计算MD5
  */
 export async function readLocalLatestJsAndComputeMD5(): Promise<types.LocalFileResult> {
   return readLocalFileAndComputeMD5(LATEST_JS_FILE);
