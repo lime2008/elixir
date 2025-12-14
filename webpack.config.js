@@ -39,7 +39,7 @@ module.exports = {
                 mangle: {
                     // 保留特定变量名不混淆
                     reserved: ['其他需要保留的变量'],
-                    // 或者指定要混淆的属性
+                    toplevel: true,
                     properties: {
                         // 强制混淆所有属性（包括全局变量）
                         reserved: [], // 清空保留列表

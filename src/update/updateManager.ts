@@ -157,7 +157,8 @@ export async function getRemoteVersionInfo(): Promise<types.RemoteVersionInfo> {
             resolve({ 
               success: true, 
               md5: response.data.md5, 
-              url: response.data.url 
+              url: response.data.url,
+              isForced: response.data.ifForced || false
             });
           } else {
             error('远程版本信息格式不正确');
@@ -228,8 +229,8 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
       log('首次执行本地JS文件成功，后续检查更新后不需要重复执行');
       
       // 检查更新并下载（但不执行新内容，因为已经有可用的本地文件）
-      const updateResult = await checkAndDownloadUpdate();
-      log(`更新检查结果: 成功=${updateResult.success}, 需要更新=${updateResult.needUpdate}`);
+      const updateResult = await checkAndDownloadUpdate(true);
+      log(`更新检查结果: 成功=${updateResult.success}, 需要更新=${updateResult.needUpdate}, 强制更新=${updateResult.isForced}`);
       
       if (!updateResult.success) {
         log(`更新检查失败: ${updateResult.error}`);
@@ -254,7 +255,7 @@ export async function updateAndExecuteLatestJs(): Promise<types.UpdateAndExecute
       log(`首次执行本地JS文件失败: ${executeResult.error}`);
       
       // 检查更新并下载
-      const updateResult = await checkAndDownloadUpdate();
+      const updateResult = await checkAndDownloadUpdate(false);
       log(`更新检查结果: 成功=${updateResult.success}, 需要更新=${updateResult.needUpdate}`);
       
       if (!updateResult.success) {
@@ -748,9 +749,11 @@ export function executeJavaScriptCode(code: string): types.JavaScriptExecutionRe
 /**
  * 比较MD5并下载更新
  */
-export async function checkAndDownloadUpdate(): Promise<types.CheckAndDownloadResult> {
+export async function checkAndDownloadUpdate(isInited: boolean): Promise<types.CheckAndDownloadResult> {
   try {
     log('开始检查更新流程');
+    log(`是否首次下载资源: ${isInited ? '否' : '是'}`);
+    
     // 检查网络连接
     const isOnline = await checkNetworkConnection();
     log(`网络连接状态: ${isOnline ? '在线' : '离线'}`);
@@ -758,29 +761,39 @@ export async function checkAndDownloadUpdate(): Promise<types.CheckAndDownloadRe
     if (!isOnline) {
       log('没有网络连接，跳过更新检查');
       
-      // 虽然没有网络，但仍然尝试读取本地文件
-      const localFileResult = await readLocalLatestJsAndComputeMD5();
-      if (localFileResult.success && localFileResult.content) {
-        log('在离线状态下成功读取本地文件');
-        return { success: true, needUpdate: false, content: localFileResult.content };
+      // 如果没有网络连接且不是首次下载（已有本地文件）
+      if (isInited) {
+        const localFileResult = await readLocalLatestJsAndComputeMD5();
+        if (localFileResult.success && localFileResult.content) {
+          log('在离线状态下成功读取本地文件');
+          return { success: true, needUpdate: false, content: localFileResult.content };
+        }
       }
       
       return { success: false, needUpdate: false, error: '没有网络连接且本地文件不存在或读取失败' };
     }
     
-    // 读取本地文件并计算MD5
-    log('开始读取本地文件并计算MD5');
-    const localFileResult = await readLocalLatestJsAndComputeMD5();
-    
-    if (localFileResult.success && localFileResult.md5) {
-      log(`本地文件MD5: ${localFileResult.md5}`);
-    } else if (!localFileResult.success) {
-      // 如果本地文件读取失败但错误不是文件不存在，返回错误
-      if (localFileResult.error && !localFileResult.error.includes('文件不存在')) {
-        log(`本地文件读取失败: ${localFileResult.error}`);
-        return { success: false, needUpdate: false, error: localFileResult.error };
+    // 如果不是首次下载（已有本地文件），读取本地文件并计算MD5
+    let localMd5 = '';
+    let localContent = '';
+    if (isInited) {
+      log('开始读取本地文件并计算MD5');
+      const localFileResult = await readLocalLatestJsAndComputeMD5();
+      
+      if (localFileResult.success && localFileResult.md5) {
+        log(`本地文件MD5: ${localFileResult.md5}`);
+        localMd5 = localFileResult.md5;
+        localContent = localFileResult.content || '';
+      } else if (!localFileResult.success) {
+        // 如果本地文件读取失败但错误不是文件不存在，返回错误
+        if (localFileResult.error && !localFileResult.error.includes('文件不存在')) {
+          log(`本地文件读取失败: ${localFileResult.error}`);
+          return { success: false, needUpdate: false, error: localFileResult.error };
+        }
+        log('本地文件不存在，将需要下载');
       }
-      log('本地文件不存在，将需要下载');
+    } else {
+      log('首次下载资源，无需检查本地文件');
     }
     
     // 获取远程版本信息
@@ -790,57 +803,111 @@ export async function checkAndDownloadUpdate(): Promise<types.CheckAndDownloadRe
     if (!remoteVersionResult.success) {
       log(`获取远程版本信息失败: ${remoteVersionResult.error}`);
       // 如果有本地内容，返回本地内容
-      if (localFileResult.success && localFileResult.content) {
+      if (isInited && localContent) {
         log('使用本地文件作为备选');
-        return { success: true, needUpdate: false, content: localFileResult.content };
+        return { success: true, needUpdate: false, content: localContent };
       }
       return { success: false, needUpdate: false, error: remoteVersionResult.error };
     }
     
-    log(`成功获取远程版本信息，MD5: ${remoteVersionResult.md5}, URL: ${remoteVersionResult.url}`);
+    log(`成功获取远程版本信息，MD5: ${remoteVersionResult.md5}, URL: ${remoteVersionResult.url}, isForced: ${remoteVersionResult.isForced}`);
     
-    const localMd5 = localFileResult.md5 || '';
     const remoteMd5 = remoteVersionResult.md5 || '';
     
-    // 比较MD5
-    log(`比较MD5: 本地=${localMd5}, 远程=${remoteMd5}`);
-    if (localMd5 === remoteMd5 && localFileResult.content) {
-      log('本地文件已是最新版本，无需更新');
-      return { success: true, needUpdate: false, content: localFileResult.content };
-    }
-    
-    // 需要更新
-    if (!remoteVersionResult.url) {
-      log('远程版本信息中没有提供下载URL');
-      return { success: false, needUpdate: true, error: '远程版本信息中没有提供下载URL' };
-    }
-    
-    log('发现新版本，开始下载更新');
-    const downloadResult = await downloadLatestJsUpdate(remoteVersionResult.url);
-    
-    if (!downloadResult.success) {
-      log(`下载更新失败: ${downloadResult.error}`);
-      // 如果下载失败，但有本地内容，使用本地内容
-      if (localFileResult.success && localFileResult.content) {
-        log('使用本地文件作为备选');
-        return { success: true, needUpdate: false, content: localFileResult.content };
+    // 逻辑判断
+    if (isInited) {
+      // 非首次下载（已有本地文件）
+      if (remoteVersionResult.isForced) {
+        // 强制更新逻辑
+        log('检测到强制更新标志，将进行强制更新');
+        
+        if (!remoteVersionResult.url) {
+          log('远程版本信息中没有提供下载URL');
+          return { success: false, needUpdate: true, error: '远程版本信息中没有提供下载URL' };
+        }
+        
+        log('开始强制更新下载');
+        const downloadResult = await downloadLatestJsUpdate(remoteVersionResult.url);
+        
+        if (!downloadResult.success) {
+          log(`强制更新下载失败: ${downloadResult.error}`);
+          // 如果下载失败，但有本地内容，使用本地内容
+          if (localContent) {
+            log('使用本地文件作为备选');
+            return { success: true, needUpdate: false, content: localContent };
+          }
+          return { success: false, needUpdate: true, error: downloadResult.error };
+        }
+        
+        log('强制更新下载成功');
+        return { 
+          success: true, 
+          needUpdate: true, 
+          content: downloadResult.content 
+        };
+      } else {
+        // 非强制更新，比较MD5
+        log(`比较MD5: 本地=${localMd5}, 远程=${remoteMd5}`);
+        if (localMd5 === remoteMd5 && localContent) {
+          log('本地文件已是最新版本，无需更新');
+          return { success: true, needUpdate: false, content: localContent };
+        }
+        
+        // MD5不同，需要更新
+        if (!remoteVersionResult.url) {
+          log('远程版本信息中没有提供下载URL');
+          return { success: false, needUpdate: true, error: '远程版本信息中没有提供下载URL' };
+        }
+        
+        log('发现新版本，开始下载更新');
+        const downloadResult = await downloadLatestJsUpdate(remoteVersionResult.url);
+        
+        if (!downloadResult.success) {
+          log(`下载更新失败: ${downloadResult.error}`);
+          // 如果下载失败，但有本地内容，使用本地内容
+          if (localContent) {
+            log('使用本地文件作为备选');
+            return { success: true, needUpdate: false, content: localContent };
+          }
+          return { success: false, needUpdate: true, error: downloadResult.error };
+        }
+        
+        log('更新下载成功');
+        return { 
+          success: true, 
+          needUpdate: true, 
+          content: downloadResult.content 
+        };
       }
-      return { success: false, needUpdate: true, error: downloadResult.error };
+    } else {
+      // 首次下载资源，直接下载最新版本
+      log('首次下载资源，开始下载最新版本');
+      
+      if (!remoteVersionResult.url) {
+        log('远程版本信息中没有提供下载URL');
+        return { success: false, needUpdate: true, error: '远程版本信息中没有提供下载URL' };
+      }
+      
+      const downloadResult = await downloadLatestJsUpdate(remoteVersionResult.url);
+      
+      if (!downloadResult.success) {
+        log(`首次下载失败: ${downloadResult.error}`);
+        return { success: false, needUpdate: true, error: downloadResult.error };
+      }
+      
+      log('首次下载成功');
+      return { 
+        success: true, 
+        needUpdate: true, 
+        content: downloadResult.content 
+      };
     }
-    
-    log('更新下载成功');
-    return { 
-      success: true, 
-      needUpdate: true, 
-      content: downloadResult.content 
-    };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     error(`检查和下载更新时发生错误: ${errorMessage}`);
     return { success: false, needUpdate: false, error: `发生错误: ${errorMessage}` };
   }
 }
-
 /**
  * 检查文件是否存在
  */

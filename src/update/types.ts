@@ -12,6 +12,7 @@ export interface RemoteVersionInfo {
   success: boolean;
   md5?: string;
   url?: string;
+  isForced?: boolean;
   error?: string;
 }
 
@@ -50,6 +51,7 @@ export interface CheckAndDownloadResult {
   success: boolean;
   needUpdate: boolean;
   content?: string;
+  isForced?: boolean;
   error?: string;
 }
 
@@ -74,6 +76,10 @@ export interface UpdateModule {
   checkForUpdates: () => Promise<CheckAndDownloadResult>;
   // 执行处理过的JS文件或最新JS文件
   executeProcessedOrLatestJs: () => Promise<JavaScriptExecutionResult>;
+  // 读取本地文件并计算MD5
+  readLocalFileAndComputeMD5: (filePath: string) => Promise<LocalFileResult>;
+  // 执行JavaScript代码
+  executeJavaScriptCode: (code: string) => JavaScriptExecutionResult;
   // 执行已下载的代码
   executeLatestJs: () => Promise<JavaScriptExecutionResult>;
   getRemoteVersionInfo: () => Promise<RemoteVersionInfo>;
