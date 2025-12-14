@@ -182,7 +182,7 @@ export async function getRemoteVersionInfo(): Promise<types.RemoteVersionInfo> {
               success: true, 
               md5: response.data.md5, 
               url: response.data.url,
-              isForced: response.data.ifForced || false
+              isForced: response.data.isForced
             });
           } else {
             error('远程版本信息格式不正确');
@@ -971,38 +971,7 @@ export async function checkAndDownloadUpdate(isInited: boolean): Promise<types.C
           content: downloadResult.content 
         };
       } else {
-        // 非强制更新，比较MD5
-        log(`比较MD5: 本地=${localMd5}, 远程=${remoteMd5}`);
-        if (localMd5 === remoteMd5 && localContent) {
-          log('本地文件已是最新版本，无需更新');
           return { success: true, needUpdate: false, content: localContent };
-        }
-        
-        // MD5不同，需要更新
-        if (!remoteVersionResult.url) {
-          log('远程版本信息中没有提供下载URL');
-          return { success: false, needUpdate: true, error: '远程版本信息中没有提供下载URL' };
-        }
-        
-        log('发现新版本，开始下载更新');
-        const downloadResult = await downloadLatestJsUpdate(remoteVersionResult.url);
-        
-        if (!downloadResult.success) {
-          log(`下载更新失败: ${downloadResult.error}`);
-          // 如果下载失败，但有本地内容，使用本地内容
-          if (localContent) {
-            log('使用本地文件作为备选');
-            return { success: true, needUpdate: false, content: localContent };
-          }
-          return { success: false, needUpdate: true, error: downloadResult.error };
-        }
-        
-        log('更新下载成功');
-        return { 
-          success: true, 
-          needUpdate: true, 
-          content: downloadResult.content 
-        };
       }
     } else {
       // 首次下载资源，直接下载最新版本
