@@ -1034,6 +1034,62 @@ export async function checkAndDownloadUpdate(isInited: boolean): Promise<types.C
   }
 }
 /**
+ * 直接检查并下载更新（不考虑isForced和isInited状态）
+ * 直接进行远程版本判断和更新
+ */
+export async function directCheckAndDownloadUpdate(): Promise<types.CheckAndDownloadResult> {
+  try {
+    log('开始直接检查更新流程（忽略isForced和isInited状态）');
+    
+    // 检查网络连接
+    const isOnline = await checkNetworkConnection();
+    log(`网络连接状态: ${isOnline ? '在线' : '离线'}`);
+    
+    if (!isOnline) {
+      log('没有网络连接，无法进行更新检查');
+      return { success: false, needUpdate: false, error: '没有网络连接' };
+    }
+    
+    // 获取远程版本信息
+    log('开始获取远程版本信息');
+    const remoteVersionResult = await getRemoteVersionInfo();
+    
+    if (!remoteVersionResult.success) {
+      log(`获取远程版本信息失败: ${remoteVersionResult.error}`);
+      return { success: false, needUpdate: false, error: remoteVersionResult.error };
+    }
+    
+    log(`成功获取远程版本信息，MD5: ${remoteVersionResult.md5}, URL: ${remoteVersionResult.url}`);
+    
+    // 检查是否有下载URL
+    if (!remoteVersionResult.url) {
+      log('远程版本信息中没有提供下载URL');
+      return { success: false, needUpdate: true, error: '远程版本信息中没有提供下载URL' };
+    }
+    
+    // 直接下载最新版本
+    log('开始下载最新版本');
+    const downloadResult = await downloadLatestJsUpdate(remoteVersionResult.url);
+    
+    if (!downloadResult.success) {
+      log(`下载失败: ${downloadResult.error}`);
+      return { success: false, needUpdate: true, error: downloadResult.error };
+    }
+    
+    log('直接更新下载成功');
+    return { 
+      success: true, 
+      needUpdate: true, 
+      content: downloadResult.content 
+    };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    error(`直接检查和下载更新时发生错误: ${errorMessage}`);
+    return { success: false, needUpdate: false, error: `发生错误: ${errorMessage}` };
+  }
+}
+
+/**
  * 检查文件是否存在
  */
 export async function checkFileExists(filename: string): Promise<boolean> {

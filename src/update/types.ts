@@ -111,6 +111,10 @@ export interface UpdateModule {
   readLocalFileAndComputeMD5: (filePath: string) => Promise<LocalFileResult>;
   // 执行JavaScript代码
   executeJavaScriptCode: (code: string) => JavaScriptExecutionResult;
+
+  // 直接检查更新
+  directCheckForUpdates: () => Promise<CheckAndDownloadResult>;
+
   // 执行已下载的代码
   executeLatestJs: () => Promise<JavaScriptExecutionResult>;
   getRemoteVersionInfo: () => Promise<RemoteVersionInfo>;

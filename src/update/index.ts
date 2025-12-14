@@ -14,6 +14,7 @@ import {
   escapeRegExp,
   executeJavaScriptCode,
   checkAndDownloadUpdate,
+  directCheckAndDownloadUpdate,
   checkFileExists,
   readLocalFileAndComputeMD5,
   readLocalLatestJsAndComputeMD5,
@@ -29,6 +30,10 @@ const updateModule: types.UpdateModule = {
   checkForUpdates: async () => {
     await checkWasm();
     return checkAndDownloadUpdate(true);
+  },
+  directCheckForUpdates: async () => {
+    await checkWasm();
+    return directCheckAndDownloadUpdate();
   },
   checkUpdateNeed,
   executeLatestJs: async () => {
